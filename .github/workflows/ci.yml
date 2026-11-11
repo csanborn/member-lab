@@ -34,6 +34,9 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Performance budget
+        run: npm run budget
+
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
 

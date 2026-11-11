@@ -1,6 +1,7 @@
 const currency = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 const wholeCurrency = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const date = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+const shortDate = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 const dateTime = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 const integer = new Intl.NumberFormat('en-US');
 
@@ -14,6 +15,11 @@ export function formatDollars(dollars: number): string {
 
 export function formatDate(iso: string): string {
   return date.format(new Date(iso));
+}
+
+/** A UTC calendar date such as "2026-09-28" as "Sep 28". */
+export function formatShortDate(day: string): string {
+  return shortDate.format(new Date(`${day}T00:00:00Z`));
 }
 
 export function formatDateTime(iso: string): string {

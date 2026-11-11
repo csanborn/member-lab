@@ -60,7 +60,9 @@ test('land, see a variant, join, cancel, and get counted in the results', async 
   // Cancel for real.
   await cancelButton.click();
   await dialog.getByRole('button', { name: 'Yes, cancel' }).click();
+  // Optimistic: the page says so at once, and focus moves to the page heading.
   await expect(status).toHaveText('Cancelled');
+  await expect(page.getByRole('heading', { name: 'Your membership' })).toBeFocused();
   await expect(page.getByRole('link', { name: 'Rejoin Crate Club' })).toBeVisible();
 
   // The results page counts this visitor: one exposure and one conversion in their variant.
@@ -69,6 +71,8 @@ test('land, see a variant, join, cancel, and get counted in the results', async 
   await expect(row.getByTestId('exposures')).toHaveText('1');
   await expect(row.getByTestId('conversions')).toHaveText('1');
   await expect(page.getByTestId('experiment-landing_hero').getByTestId('verdict')).toContainText('Collecting data');
+  // This journey's own page loads have reported Web Vitals by now.
+  await expect(page.getByTestId('web-vitals').getByRole('listitem').first()).toBeVisible();
   await expectAccessible(page);
 
   expect(errors).toEqual([]);
