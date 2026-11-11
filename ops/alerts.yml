@@ -1,0 +1,26 @@
+# Prometheus alerting rules for member-lab. Runbook: README.md, "Alert: GraphQLErrorRateHigh".
+groups:
+  - name: member-lab
+    rules:
+      - alert: GraphQLErrorRateHigh
+        # Share of executed GraphQL operations that failed, over 5 minutes. Declines and other
+        # business outcomes are returned as data, so they do not count: these are real failures.
+        # The traffic floor stops a single error at 3am from paging anyone.
+        expr: |
+          (
+            sum(rate(graphql_operations_total{outcome="error"}[5m]))
+            /
+            sum(rate(graphql_operations_total{outcome=~"success|error"}[5m]))
+          ) > 0.02
+          and
+          sum(rate(graphql_operations_total{outcome=~"success|error"}[5m])) > 0.2
+        for: 10m
+        labels:
+          severity: page
+          team: membership
+        annotations:
+          summary: More than 2% of GraphQL operations are failing
+          description: >-
+            {{ $value | humanizePercentage }} of GraphQL operations failed over the last 5 minutes,
+            for 10 minutes. Signups and cancels may be failing for members.
+          runbook: README.md#alert-graphqlerrorratehigh

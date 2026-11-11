@@ -6,7 +6,7 @@ Corner Crate, Crate Club and every price, perk and user in this repo are invente
 
 ## Goals
 
-- **Membership lifecycle.** A visitor can join, see their membership and cancel. Status follows an explicit state machine: `trial`, `active`, `past_due`, `cancelled`.
+- **Membership lifecycle.** A visitor can join, see their membership and cancel. Status follows an explicit state machine: `TRIAL`, `ACTIVE`, `PAST_DUE`, `CANCELLED`.
 - **Money is never double counted.** Signup, billing and cancel take an idempotency key. Retries, double clicks and a payment response lost in transit never create a second membership or a second charge.
 - **Experiments.** Users are bucketed by a deterministic hash. An exposure is logged only when a variant is actually rendered. Conversions are joined to exposures on the server. A results view reports conversion rate per variant, lift with a confidence interval, a two-proportion z-test and a sample ratio mismatch (SRM) check.
 - **Believable data.** A seeded traffic simulator fills the experiments and memberships with data that looks like a real two-week test, through the same services the API uses.
@@ -41,15 +41,15 @@ A pure function `transition(status, event)` returns the next status or an `Inval
 
 | From | `CHARGE_SUCCEEDED` | `CHARGE_FAILED` | `GRACE_EXPIRED` | `CANCEL` |
 | --- | --- | --- | --- | --- |
-| `trial` | `active` | `past_due` | invalid | `cancelled` |
-| `active` | `active` | `past_due` | invalid | `cancelled` |
-| `past_due` | `active` | `past_due` | `cancelled` | `cancelled` |
-| `cancelled` | invalid | invalid | invalid | invalid |
+| `TRIAL` | `ACTIVE` | `PAST_DUE` | invalid | `CANCELLED` |
+| `ACTIVE` | `ACTIVE` | `PAST_DUE` | invalid | `CANCELLED` |
+| `PAST_DUE` | `ACTIVE` | `PAST_DUE` | `CANCELLED` | `CANCELLED` |
+| `CANCELLED` | invalid | invalid | invalid | invalid |
 
-- A monthly signup that is trial eligible starts in `trial` with no charge. Any other signup charges first and starts `active` only if the charge succeeds. A declined signup creates no membership.
+- A monthly signup that is trial eligible starts in `TRIAL` with no charge. Any other signup charges first and starts `ACTIVE` only if the charge succeeds. A declined signup creates no membership.
 - Every transition is written to an append-only event log with from, to, event and time.
-- Billing (end of trial, renewal, retry) is triggered on demand by a demo control, since the demo has no scheduler. The third failed charge in a row while `past_due` applies `GRACE_EXPIRED`.
-- At most one membership per user is not `cancelled`, enforced by a partial unique index as well as in code.
+- Billing (end of trial, renewal, retry) is triggered on demand by a demo control, since the demo has no scheduler. The third failed charge in a row applies `GRACE_EXPIRED`.
+- At most one membership per user is not `CANCELLED`, enforced by a partial unique index as well as in code.
 
 ### Idempotency
 
@@ -68,7 +68,7 @@ A pure function `transition(status, event)` returns the next status or an `Inval
 ## Experiments
 
 - Config lives in code: key, description, variants with weights, primary metric, and a salt.
-- **Bucketing:** `bucket = fnv1a32(salt + ":" + experimentKey + ":" + userId) mod 10000`, mapped onto cumulative variant weights. Same input, same variant, always. The split is close to the weights over many users.
+- **Bucketing:** `bucket = hash32(salt + ":" + experimentKey + ":" + userId) mod 10000`, where `hash32` is FNV-1a with the MurmurHash3 finalizer, mapped onto cumulative variant weights. Same input, same variant, always. The split is close to the weights over many users.
 - **Assignment** (`assignment` query) is a pure read and logs nothing.
 - **Exposure** (`logExposure` mutation) is called by the variant component after it renders. The server recomputes the variant (it never trusts the client's), and records the first exposure per user per experiment.
 - **Conversion:** starting a membership records a `membership_started` event. A conversion counts for an experiment only if it happened at or after that user's first exposure.
