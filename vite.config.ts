@@ -15,7 +15,14 @@ export default defineConfig({
     projects: [
       {
         extends: true,
-        test: { name: 'server', include: ['server/**/*.test.ts'], environment: 'node' },
+        test: {
+          name: 'server',
+          include: ['server/**/*.test.ts'],
+          environment: 'node',
+          // Load graphql and everything that imports it through one resolver, so there is a single
+          // GraphQLError class. Two copies make Yoga mask expected errors as unexpected ones.
+          server: { deps: { inline: ['graphql', 'graphql-yoga', /@graphql-tools\//, /@envelop\//] } },
+        },
       },
       {
         extends: true,

@@ -42,7 +42,7 @@ export function App() {
       </a>
       <header className="site-header">
         <div className="container site-header__inner">
-          <NavLink to="/" className="brand" aria-label="Corner Crate home">
+          <NavLink to="/" className="brand">
             <CrateLogo />
             <span>
               Corner Crate <span className="brand__club">Crate Club</span>

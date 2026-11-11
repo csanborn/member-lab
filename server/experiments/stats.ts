@@ -90,7 +90,11 @@ export function wilsonInterval(successes: number, trials: number, z = Z_95): Int
   const denominator = 1 + z2 / trials;
   const center = (p + z2 / (2 * trials)) / denominator;
   const half = (z * Math.sqrt((p * (1 - p)) / trials + z2 / (4 * trials * trials))) / denominator;
-  return { low: Math.max(0, center - half), high: Math.min(1, center + half) };
+  // At 0 or all successes the bound is exactly 0 or 1; the formula only gets there up to rounding.
+  return {
+    low: successes === 0 ? 0 : Math.max(0, center - half),
+    high: successes === trials ? 1 : Math.min(1, center + half),
+  };
 }
 
 export interface Proportion {
