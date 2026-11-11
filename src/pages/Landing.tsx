@@ -1,6 +1,6 @@
 import { useId, useState } from 'react';
 import { Link } from 'react-router';
-import { useAssignment, usePlans, useViewer } from '../api/hooks';
+import { useAssignment, usePlans, usePrefetchJoin, useViewer } from '../api/hooks';
 import { Perks } from '../components/Perks';
 import { useExposure } from '../experiments/useExposure';
 import { formatCents, formatDollars, intervalLabel } from '../format';
@@ -16,9 +16,16 @@ function useCallToAction() {
 
 function CallToAction() {
   const cta = useCallToAction();
+  const prefetchJoin = usePrefetchJoin();
   return (
     <div className="hero__cta">
-      <Link to={cta.to} className="button button--primary button--large">
+      <Link
+        to={cta.to}
+        className="button button--primary button--large"
+        onMouseEnter={prefetchJoin}
+        onFocus={prefetchJoin}
+        onTouchStart={prefetchJoin}
+      >
         {cta.label}
       </Link>
       <p className="hero__note">{cta.note}</p>

@@ -1017,3 +1017,12 @@ select {
     scroll-behavior: auto !important;
   }
 }
+
+/* Headings that receive focus from code (route changes, after cancel) need no ring. */
+h1[tabindex='-1']:focus {
+  outline: none;
+}
+
+.page-error {
+  padding-block: 3rem;
+}

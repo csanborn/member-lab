@@ -123,25 +123,34 @@ function MembershipView({ membership }: { membership: Membership }) {
   const cancel = useCancelMembership();
   const [confirming, setConfirming] = useState(false);
   const idempotencyKey = useRef(newIdempotencyKey());
+  const heading = useRef<HTMLHeadingElement>(null);
   const live = membership.status !== 'CANCELLED';
 
+  // The cancel is optimistic: the dialog closes and the page shows "Cancelled" straight away.
+  // If the server refuses or cannot be reached, the hook restores the membership and we say so.
   function confirmCancel() {
-    cancel
-      .mutateAsync({ idempotencyKey: idempotencyKey.current })
-      .then(() => {
-        setConfirming(false);
-        idempotencyKey.current = newIdempotencyKey();
-      })
-      .catch(() => {
-        // Shown in the dialog. The key is kept so trying again is safe.
-      });
+    setConfirming(false);
+    // The button that opened the dialog is about to be replaced, so give focus a stable home.
+    requestAnimationFrame(() => heading.current?.focus());
+    cancel.mutate(
+      { idempotencyKey: idempotencyKey.current },
+      {
+        onSuccess: () => {
+          idempotencyKey.current = newIdempotencyKey();
+        },
+      },
+    );
   }
+
+  const cancelFailed = cancel.isError || Boolean(cancel.data?.error);
 
   return (
     <>
       <div className="member-head">
         <div>
-          <h1>Your membership</h1>
+          <h1 ref={heading} tabIndex={-1}>
+            Your membership
+          </h1>
           <p className="member-head__status">
             <StatusBadge status={membership.status} />
           </p>
@@ -164,8 +173,14 @@ function MembershipView({ membership }: { membership: Membership }) {
       </div>
 
       <p className="visually-hidden" role="status">
-        {cancel.isSuccess ? 'Your membership is cancelled.' : ''}
+        {membership.status === 'CANCELLED' && (cancel.isPending || cancel.isSuccess) ? 'Your membership is cancelled.' : ''}
       </p>
+      {cancelFailed && (
+        <p className="alert alert--error" role="alert">
+          We could not cancel your membership, so it is still {statusLabel(membership.status).toLowerCase()}. Please try
+          again.
+        </p>
+      )}
       {membership.status === 'PAST_DUE' && (
         <p className="alert alert--warning">
           Your last payment failed. Your perks keep working while we retry, and the membership is cancelled after three failed
@@ -195,7 +210,6 @@ function MembershipView({ membership }: { membership: Membership }) {
         title="Cancel Crate Club?"
         confirmLabel="Yes, cancel"
         cancelLabel="Keep my membership"
-        busy={cancel.isPending}
         onConfirm={confirmCancel}
         onClose={() => {
           setConfirming(false);
@@ -205,11 +219,6 @@ function MembershipView({ membership }: { membership: Membership }) {
           You will lose free delivery and member prices after {formatDate(membership.currentPeriodEnd)}. You will not be charged
           again.
         </p>
-        {cancel.error && (
-          <p className="alert alert--error" role="alert">
-            {cancel.error.message}
-          </p>
-        )}
       </ConfirmDialog>
     </>
   );

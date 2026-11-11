@@ -1,11 +1,11 @@
-import { useEffect, useRef } from 'react';
+import { Suspense, useEffect, useRef } from 'react';
 import { NavLink, Route, Routes, useLocation } from 'react-router';
 import { CrateLogo } from './components/CrateLogo';
-import { Experiments } from './pages/Experiments';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { Join } from './pages/Join';
 import { Landing } from './pages/Landing';
-import { Member } from './pages/Member';
 import { NotFound } from './pages/NotFound';
+import { Experiments, Member, loadExperiments, loadMember } from './routes';
 import { resetVisitor, useVisitorId } from './visitor';
 
 const TITLES: Record<string, string> = {
@@ -31,8 +31,26 @@ function useRouteAnnouncements() {
   return main;
 }
 
+function preload(load: () => Promise<unknown>) {
+  const start = () => {
+    void load();
+  };
+  return { onMouseEnter: start, onFocus: start, onTouchStart: start };
+}
+
+function PageFallback() {
+  return (
+    <div className="container page" aria-busy="true">
+      <span className="visually-hidden">Loading</span>
+      <div className="skeleton skeleton--title" />
+      <div className="skeleton skeleton--card" />
+    </div>
+  );
+}
+
 export function App() {
   const main = useRouteAnnouncements();
+  const { pathname } = useLocation();
   const visitorId = useVisitorId();
 
   return (
@@ -56,10 +74,14 @@ export function App() {
                 </NavLink>
               </li>
               <li>
-                <NavLink to="/member">My membership</NavLink>
+                <NavLink to="/member" {...preload(loadMember)}>
+                  My membership
+                </NavLink>
               </li>
               <li>
-                <NavLink to="/experiments">Experiments</NavLink>
+                <NavLink to="/experiments" {...preload(loadExperiments)}>
+                  Experiments
+                </NavLink>
               </li>
             </ul>
           </nav>
@@ -67,13 +89,17 @@ export function App() {
       </header>
 
       <main id="main" ref={main} tabIndex={-1}>
-        <Routes>
-          <Route path="/" element={<Landing />} />
-          <Route path="/join" element={<Join />} />
-          <Route path="/member" element={<Member />} />
-          <Route path="/experiments" element={<Experiments />} />
-          <Route path="*" element={<NotFound />} />
-        </Routes>
+        <ErrorBoundary resetKey={pathname}>
+          <Suspense fallback={<PageFallback />}>
+            <Routes>
+              <Route path="/" element={<Landing />} />
+              <Route path="/join" element={<Join />} />
+              <Route path="/member" element={<Member />} />
+              <Route path="/experiments" element={<Experiments />} />
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+          </Suspense>
+        </ErrorBoundary>
       </main>
 
       <footer className="site-footer">

@@ -6,7 +6,6 @@ interface ConfirmDialogProps {
   children: ReactNode;
   confirmLabel: string;
   cancelLabel: string;
-  busy?: boolean;
   onConfirm: () => void;
   onClose: () => void;
 }
@@ -15,7 +14,7 @@ interface ConfirmDialogProps {
  * The native modal dialog: the browser traps focus, makes the page behind it inert, closes on
  * Escape and returns focus to the opener. The least destructive button gets focus first.
  */
-export function ConfirmDialog({ open, title, children, confirmLabel, cancelLabel, busy = false, onConfirm, onClose }: ConfirmDialogProps) {
+export function ConfirmDialog({ open, title, children, confirmLabel, cancelLabel, onConfirm, onClose }: ConfirmDialogProps) {
   const dialog = useRef<HTMLDialogElement>(null);
   const titleId = useId();
 
@@ -34,8 +33,8 @@ export function ConfirmDialog({ open, title, children, confirmLabel, cancelLabel
         <button type="button" className="button button--secondary" onClick={onClose} autoFocus>
           {cancelLabel}
         </button>
-        <button type="button" className="button button--danger" onClick={onConfirm} disabled={busy} aria-busy={busy}>
-          {busy ? 'Cancelling…' : confirmLabel}
+        <button type="button" className="button button--danger" onClick={onConfirm}>
+          {confirmLabel}
         </button>
       </div>
     </dialog>

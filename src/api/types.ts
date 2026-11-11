@@ -82,5 +82,22 @@ export interface Experiment {
     totalExposures: number;
     variants: VariantResult[];
     sampleRatio: { observedShare: number; expectedShare: number; pValue: number; mismatch: boolean };
+    daily: DailyCount[];
   };
+}
+
+export interface DailyCount {
+  date: string;
+  variant: string;
+  exposures: number;
+  conversions: number;
+}
+
+export type VitalName = 'LCP' | 'INP' | 'CLS' | 'FCP' | 'TTFB';
+
+export interface WebVital {
+  name: VitalName;
+  p75: number;
+  samples: number;
+  rating: 'GOOD' | 'NEEDS_IMPROVEMENT' | 'POOR';
 }
