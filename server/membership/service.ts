@@ -151,7 +151,7 @@ export class MembershipService {
       };
       this.#repo.transaction(() => {
         this.#repo.insertMembership(row);
-        this.#record(row, 'STARTED', null, withTrial ? `${plan.trialDays} day free trial` : 'Charged at signup');
+        this.#record(row, 'STARTED', null, withTrial ? 'No charge until the trial ends' : 'Charged at signup');
         this.#repo.insertConversion({ userId, metric: CONVERSION_METRIC, at: row.startedAt });
       });
       this.#logger.info({ membershipId: row.id, planId: plan.id, status: row.status }, 'membership started');
