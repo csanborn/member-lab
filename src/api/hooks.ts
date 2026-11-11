@@ -145,7 +145,7 @@ export function useExperiments() {
             key description metric
             results {
               status minExposuresPerVariant totalExposures
-              sampleRatio { chiSquare pValue mismatch }
+              sampleRatio { observedShare expectedShare pValue mismatch }
               variants {
                 key label weight isControl exposures conversions rate
                 interval { low high }

@@ -26,7 +26,6 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await ctx.close();
-  ctx.repo.close();
 });
 
 interface GraphQLResult<T> {
@@ -183,8 +182,23 @@ describe('operations endpoints', () => {
     expect(text).toContain('graphql_operations_total{operation="invalid",type="unknown",outcome="invalid"} 1');
     expect(text).toMatch(/http_request_duration_seconds_bucket\{le="0.1",route="\/graphql",method="POST"\} \d/);
     expect(text).toContain('payment_charges_total{outcome="transient_error"} 3');
-    expect(text).toContain('membership_transitions_total');
     expect(text).toContain('process_cpu_user_seconds_total');
+  });
+
+  it('accepts Web Vitals beacons and reports their 75th percentile', async () => {
+    for (const value of [1200, 1800, 2100, 3900]) {
+      const response = await fetch(`${ctx.url}/vitals`, { method: 'POST', body: JSON.stringify({ name: 'LCP', value }) });
+      expect(response.status).toBe(204);
+    }
+    const bad = await fetch(`${ctx.url}/vitals`, { method: 'POST', body: JSON.stringify({ name: 'FID', value: 10 }) });
+    expect(bad.status).toBe(400);
+    const tooBig = await fetch(`${ctx.url}/vitals`, { method: 'POST', body: 'x'.repeat(5000) });
+    expect(tooBig.status).toBe(400);
+
+    const vitals = await gql<{ webVitals: { name: string; p75: number; samples: number; rating: string }[] }>(
+      '{ webVitals { name p75 samples rating } }',
+    );
+    expect(vitals.body.data?.webVitals).toEqual([{ name: 'LCP', p75: 2100, samples: 4, rating: 'GOOD' }]);
   });
 
   it('answers 404 for unknown paths when no web build is served', async () => {

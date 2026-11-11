@@ -9,7 +9,7 @@ export default defineConfig({
   build: { outDir: 'dist/web', emptyOutDir: true },
   server: {
     port: 5173,
-    proxy: { '/graphql': api, '/metrics': api, '/healthz': api },
+    proxy: { '/graphql': api, '/metrics': api, '/healthz': api, '/vitals': api },
   },
   test: {
     projects: [

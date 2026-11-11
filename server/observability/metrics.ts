@@ -41,18 +41,6 @@ export function createMetrics() {
       labelNames: ['outcome'] as const,
       registers: [registry],
     }),
-    membershipTransitions: new Counter({
-      name: 'membership_transitions_total',
-      help: 'Membership state machine transitions.',
-      labelNames: ['event', 'from', 'to'] as const,
-      registers: [registry],
-    }),
-    experimentExposures: new Counter({
-      name: 'experiment_exposures_total',
-      help: 'First exposures by experiment and variant.',
-      labelNames: ['experiment', 'variant'] as const,
-      registers: [registry],
-    }),
   };
 }
 

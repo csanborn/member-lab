@@ -7,20 +7,17 @@ describe('ExperimentService', () => {
     const { services, repo } = createTestServices();
     const assignment = services.experiments.assign('user-1', 'landing_hero');
     expect(['control', 'savings_calculator']).toContain(assignment.variant);
-    expect(repo.countVariantResults('landing_hero', 'membership_started')).toEqual([]);
+    expect(repo.variantCounts('landing_hero', 'membership_started')).toEqual([]);
   });
 
   it('keeps only the first exposure, with the server-computed variant', () => {
-    const { services, clock, metrics } = createTestServices();
+    const { services, clock } = createTestServices();
     const first = services.experiments.logExposure('user-1', 'landing_hero');
     clock.advance(1000);
     const again = services.experiments.logExposure('user-1', 'landing_hero');
     expect(first.firstExposure).toBe(true);
     expect(again).toEqual({ assignment: first.assignment, firstExposure: false });
     expect(services.experiments.results('landing_hero').totalExposures).toBe(1);
-    return metrics.experimentExposures.get().then((counter) => {
-      expect(counter.values.reduce((sum, value) => sum + value.value, 0)).toBe(1);
-    });
   });
 
   it('counts a conversion only if it came at or after the first exposure', async () => {
@@ -39,6 +36,18 @@ describe('ExperimentService', () => {
     expect(results.variants.reduce((sum, variant) => sum + variant.conversions, 0)).toBe(1);
     const converted = results.variants.find((variant) => variant.conversions === 1);
     expect(converted?.key).toBe(services.experiments.assign('after', 'landing_hero').variant);
+  });
+
+  it('reports new exposures and conversions per day, with each conversion on the day it happened', async () => {
+    const { services, clock } = createTestServices();
+    const variant = services.experiments.assign('user-1', 'landing_hero').variant;
+    services.experiments.logExposure('user-1', 'landing_hero');
+    clock.advance(24 * 60 * 60 * 1000);
+    await services.memberships.start('user-1', { planId: 'MONTHLY', paymentMethod: 'CARD_OK', idempotencyKey: 'k1' });
+    expect(services.experiments.results('landing_hero').daily).toEqual([
+      { date: '2026-10-01', variant, exposures: 1, conversions: 0 },
+      { date: '2026-10-02', variant, exposures: 0, conversions: 1 },
+    ]);
   });
 
   it('collects until every variant has enough exposures, then reports a comparison', () => {

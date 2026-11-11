@@ -2,10 +2,11 @@ import type { LevelWithSilent } from 'pino';
 
 export interface Config {
   port: number;
-  dbPath: string;
   logLevel: LevelWithSilent;
   staticDir: string;
   dev: boolean;
+  /** Simulated visitors loaded at startup so the results page has data. 0 starts empty. */
+  seedVisitors: number;
   payment: { latencyMs: number; transientRate: number; lostResponseRate: number };
 }
 
@@ -24,10 +25,10 @@ export function loadConfig(): Config {
   if (!LEVELS.has(logLevel)) throw new Error(`LOG_LEVEL must be one of ${[...LEVELS].join(', ')}`);
   return {
     port: number('PORT', 4000),
-    dbPath: process.env.DB_PATH || 'data/member-lab.db',
     logLevel: logLevel as LevelWithSilent,
     staticDir: process.env.STATIC_DIR || 'dist/web',
     dev: process.env.NODE_ENV !== 'production',
+    seedVisitors: number('SEED_VISITORS', 24_000),
     payment: {
       latencyMs: number('PAYMENT_LATENCY_MS', 150),
       transientRate: number('PAYMENT_TRANSIENT_RATE', 0),

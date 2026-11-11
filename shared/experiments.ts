@@ -12,8 +12,8 @@ export interface ExperimentConfig {
   metric: 'membership_started';
   /** Changing the salt reshuffles every user, which is how a rerun gets fresh buckets. */
   salt: string;
-  /** The first variant is the control. */
-  variants: readonly VariantConfig[];
+  /** Exactly two arms: the control first, then the treatment. */
+  variants: readonly [control: VariantConfig, treatment: VariantConfig];
 }
 
 export const EXPERIMENTS = {

@@ -1,7 +1,7 @@
 export type PlanId = 'MONTHLY' | 'ANNUAL';
 export type MembershipStatus = 'TRIAL' | 'ACTIVE' | 'PAST_DUE' | 'CANCELLED';
 export type DemoPaymentMethod = 'CARD_OK' | 'CARD_DECLINES';
-export type UserErrorCode = 'PAYMENT_DECLINED' | 'ALREADY_MEMBER' | 'NOT_A_MEMBER' | 'IDEMPOTENCY_KEY_REUSED' | 'REQUEST_IN_PROGRESS';
+export type UserErrorCode = 'PAYMENT_DECLINED' | 'ALREADY_MEMBER' | 'NOT_A_MEMBER' | 'IDEMPOTENCY_KEY_REUSED';
 
 export interface Plan {
   id: PlanId;
@@ -81,6 +81,6 @@ export interface Experiment {
     minExposuresPerVariant: number;
     totalExposures: number;
     variants: VariantResult[];
-    sampleRatio: { chiSquare: number; pValue: number; mismatch: boolean };
+    sampleRatio: { observedShare: number; expectedShare: number; pValue: number; mismatch: boolean };
   };
 }

@@ -1,7 +1,6 @@
 import { getOperationAST, type DocumentNode } from 'graphql';
 import { isAsyncIterable, type Plugin } from 'graphql-yoga';
 import type { Metrics } from '../observability/metrics.js';
-import { requestContext } from '../observability/request-context.js';
 
 function describe(document: DocumentNode, operationName: string | null | undefined) {
   const operation = getOperationAST(document, operationName);
@@ -22,8 +21,6 @@ export function useOperationMetrics(metrics: Metrics): Plugin {
     onExecute({ args }) {
       const { document, operationName } = args as { document: DocumentNode; operationName?: string | null };
       const labels = describe(document, operationName);
-      const store = requestContext.getStore();
-      if (store) store.operationName = labels.operation;
       const stop = metrics.graphqlDuration.startTimer(labels);
       return {
         onExecuteDone({ result }) {

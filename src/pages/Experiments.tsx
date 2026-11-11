@@ -133,7 +133,8 @@ function ExperimentCard({ experiment }: { experiment: Experiment }) {
       {results.totalExposures > 0 && control && <IntervalChart variants={results.variants} label={`Conversion rate by variant. ${chartLabel}.`} />}
 
       <p className="srm">
-        Sample ratio check: chi-square {results.sampleRatio.chiSquare.toFixed(2)}, p {formatPValue(results.sampleRatio.pValue)}.{' '}
+        Sample ratio check: control got {formatPercent(results.sampleRatio.observedShare)} of exposures against a planned{' '}
+        {formatPercent(results.sampleRatio.expectedShare)}, p {formatPValue(results.sampleRatio.pValue)}.{' '}
         {results.sampleRatio.mismatch ? 'Mismatch.' : 'Split looks as planned.'}
       </p>
     </section>

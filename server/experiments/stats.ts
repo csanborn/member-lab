@@ -1,4 +1,9 @@
-/** z for a two-sided 95% interval. */
+/**
+ * The statistics behind the results page, as small pure functions. Every experiment here has
+ * two arms (a control and one treatment), which keeps each test a comparison of two proportions.
+ */
+
+/** z for a two-sided 95% interval: 95% of a standard normal lies within ±1.96. */
 export const Z_95 = 1.959963984540054;
 
 export interface Interval {
@@ -6,82 +11,27 @@ export interface Interval {
   high: number;
 }
 
-const LANCZOS = [
-  0.99999999999980993, 676.5203681218851, -1259.1392167224028, 771.32342877765313, -176.61502916214059,
-  12.507343278686905, -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7,
-];
-
-/** ln Γ(x) by the Lanczos approximation (g = 7), good to about 15 digits. */
-export function lnGamma(x: number): number {
-  if (x < 0.5) return Math.log(Math.PI / Math.sin(Math.PI * x)) - lnGamma(1 - x);
-  const shifted = x - 1;
-  let sum = LANCZOS[0] ?? 1;
-  for (let i = 1; i < LANCZOS.length; i += 1) sum += (LANCZOS[i] ?? 0) / (shifted + i);
-  const t = shifted + 7.5;
-  return 0.5 * Math.log(2 * Math.PI) + (shifted + 0.5) * Math.log(t) - t + Math.log(sum);
-}
-
-const EPSILON = 1e-15;
-const MAX_ITERATIONS = 1000;
-
-/** Lower regularized gamma P(a, x) as a power series. Converges fast for x < a + 1. */
-function gammaPSeries(a: number, x: number): number {
-  let term = 1 / a;
-  let sum = term;
-  for (let n = 1; n < MAX_ITERATIONS; n += 1) {
-    term *= x / (a + n);
-    sum += term;
-    if (Math.abs(term) < Math.abs(sum) * EPSILON) break;
-  }
-  return sum * Math.exp(-x + a * Math.log(x) - lnGamma(a));
-}
-
-/** Upper regularized gamma Q(a, x) as a continued fraction (modified Lentz). Converges fast for x >= a + 1. */
-function gammaQContinuedFraction(a: number, x: number): number {
-  const tiny = 1e-300;
-  let b = x + 1 - a;
-  let c = 1 / tiny;
-  let d = 1 / b;
-  let h = d;
-  for (let i = 1; i < MAX_ITERATIONS; i += 1) {
-    const an = -i * (i - a);
-    b += 2;
-    d = an * d + b;
-    if (Math.abs(d) < tiny) d = tiny;
-    c = b + an / c;
-    if (Math.abs(c) < tiny) c = tiny;
-    d = 1 / d;
-    const delta = d * c;
-    h *= delta;
-    if (Math.abs(delta - 1) < EPSILON) break;
-  }
-  return Math.exp(-x + a * Math.log(x) - lnGamma(a)) * h;
-}
-
-/** Q(a, x) = Γ(a, x) / Γ(a). Both the normal and chi-square tails reduce to it. */
-export function regularizedGammaQ(a: number, x: number): number {
-  if (x <= 0) return 1;
-  return x < a + 1 ? 1 - gammaPSeries(a, x) : gammaQContinuedFraction(a, x);
-}
-
-/** P(|Z| >= |z|) for a standard normal Z. Uses erfc(t) = Q(1/2, t²), which keeps precision in the far tail. */
-export function twoSidedNormalP(z: number): number {
-  return regularizedGammaQ(0.5, (z * z) / 2);
-}
-
+/**
+ * Standard normal CDF, P(Z <= z). Uses the Abramowitz and Stegun 7.1.26 approximation of the
+ * error function, accurate to about 1e-7, which is far finer than any p-value we display.
+ */
 export function normalCdf(z: number): number {
-  const tail = twoSidedNormalP(z) / 2;
-  return z < 0 ? tail : 1 - tail;
+  const x = Math.abs(z) / Math.SQRT2;
+  const t = 1 / (1 + 0.3275911 * x);
+  const polynomial = t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429))));
+  const erf = 1 - polynomial * Math.exp(-x * x);
+  return z >= 0 ? (1 + erf) / 2 : (1 - erf) / 2;
 }
 
-/** P(X >= x) for a chi-square variable with `df` degrees of freedom. */
-export function chiSquareSurvival(x: number, df: number): number {
-  return regularizedGammaQ(df / 2, x / 2);
+/** P(|Z| >= |z|): how surprising a z-score this large would be if there were no real difference. */
+export function twoSidedP(z: number): number {
+  return Math.min(1, 2 * (1 - normalCdf(Math.abs(z))));
 }
 
 /**
- * Wilson score interval for a binomial proportion. Unlike the textbook Wald interval it stays
- * inside [0, 1] and behaves at rates near zero, which conversion rates often are.
+ * 95% Wilson score interval for a conversion rate. The textbook "p ± 1.96·SE" interval misbehaves
+ * at low rates and small samples (it can go below zero). Wilson does not, and conversion rates are
+ * usually low.
  */
 export function wilsonInterval(successes: number, trials: number, z = Z_95): Interval {
   if (trials === 0) return { low: 0, high: 1 };
@@ -90,7 +40,6 @@ export function wilsonInterval(successes: number, trials: number, z = Z_95): Int
   const denominator = 1 + z2 / trials;
   const center = (p + z2 / (2 * trials)) / denominator;
   const half = (z * Math.sqrt((p * (1 - p)) / trials + z2 / (4 * trials * trials))) / denominator;
-  // At 0 or all successes the bound is exactly 0 or 1; the formula only gets there up to rounding.
   return {
     low: successes === 0 ? 0 : Math.max(0, center - half),
     high: successes === trials ? 1 : Math.min(1, center + half),
@@ -103,18 +52,21 @@ export interface Proportion {
 }
 
 export interface Comparison {
-  /** Treatment rate minus control rate. */
+  /** Treatment rate minus control rate, in absolute terms (0.016 is 1.6 points). */
   absoluteLift: number;
-  /** 95% interval on the absolute lift (unpooled standard error). */
+  /** 95% interval on the absolute lift. If it excludes zero, so does the test. */
   interval: Interval;
-  /** Absolute lift over the control rate. Null when the control rate is zero. */
+  /** Absolute lift over the control rate (0.18 is 18% better). Null when the control rate is zero. */
   relativeLift: number | null;
   z: number;
-  /** Two-sided p-value of the pooled two-proportion z-test. */
   pValue: number;
 }
 
-/** Two-proportion z-test of treatment against control. */
+/**
+ * Two-proportion z-test. The p-value uses the pooled rate (assume no difference, then ask how
+ * unlikely the observed gap is). The interval uses each arm's own rate, which is the honest
+ * spread of the lift itself.
+ */
 export function compareProportions(control: Proportion, treatment: Proportion, z = Z_95): Comparison {
   const n1 = control.exposures;
   const n2 = treatment.exposures;
@@ -127,34 +79,35 @@ export function compareProportions(control: Proportion, treatment: Proportion, z
   const pooled = (control.conversions + treatment.conversions) / (n1 + n2);
   const pooledSe = Math.sqrt(pooled * (1 - pooled) * (1 / n1 + 1 / n2));
   const statistic = pooledSe === 0 ? 0 : absoluteLift / pooledSe;
-  const unpooledSe = Math.sqrt((p1 * (1 - p1)) / n1 + (p2 * (1 - p2)) / n2);
+  const se = Math.sqrt((p1 * (1 - p1)) / n1 + (p2 * (1 - p2)) / n2);
   return {
     absoluteLift,
-    interval: { low: absoluteLift - z * unpooledSe, high: absoluteLift + z * unpooledSe },
+    interval: { low: absoluteLift - z * se, high: absoluteLift + z * se },
     relativeLift,
     z: statistic,
-    pValue: pooledSe === 0 ? 1 : twoSidedNormalP(statistic),
+    pValue: pooledSe === 0 ? 1 : twoSidedP(statistic),
   };
 }
 
-export interface GoodnessOfFit {
-  chiSquare: number;
-  degreesOfFreedom: number;
+export interface SampleRatioCheck {
+  /** Share of exposures the control actually got. */
+  observedShare: number;
+  /** Share the control should get from the configured weights. */
+  expectedShare: number;
   pValue: number;
 }
 
-/** Chi-square goodness of fit of observed counts against expected shares (any positive weights). */
-export function chiSquareGoodnessOfFit(observed: readonly number[], weights: readonly number[]): GoodnessOfFit {
-  if (observed.length !== weights.length || observed.length < 2) {
-    throw new Error('Need at least two groups, with one weight per observed count');
-  }
-  const total = observed.reduce((sum, count) => sum + count, 0);
-  const weightTotal = weights.reduce((sum, weight) => sum + weight, 0);
-  const degreesOfFreedom = observed.length - 1;
-  if (total === 0) return { chiSquare: 0, degreesOfFreedom, pValue: 1 };
-  const chiSquare = observed.reduce((sum, count, i) => {
-    const expected = (total * (weights[i] ?? 0)) / weightTotal;
-    return sum + (count - expected) ** 2 / expected;
-  }, 0);
-  return { chiSquare, degreesOfFreedom, pValue: chiSquareSurvival(chiSquare, degreesOfFreedom) };
+/**
+ * Sample ratio mismatch: did the control get the share of exposures its weight promised? With
+ * random bucketing the share lands very close to plan, so a big miss means exposures are being lost
+ * or misassigned, and the experiment's comparison cannot be trusted. This is a one-proportion
+ * z-test on the control's share (for two arms it equals the usual chi-square test).
+ */
+export function sampleRatioCheck(controlExposures: number, treatmentExposures: number, controlWeight: number, treatmentWeight: number): SampleRatioCheck {
+  const total = controlExposures + treatmentExposures;
+  const expectedShare = controlWeight / (controlWeight + treatmentWeight);
+  if (total === 0) return { observedShare: expectedShare, expectedShare, pValue: 1 };
+  const observedShare = controlExposures / total;
+  const se = Math.sqrt((expectedShare * (1 - expectedShare)) / total);
+  return { observedShare, expectedShare, pValue: se === 0 ? 1 : twoSidedP((observedShare - expectedShare) / se) };
 }

@@ -1,12 +1,11 @@
 import { EXPERIMENTS, type ExperimentConfig, type ExperimentKey } from '../../shared/experiments.js';
 import type { Clock } from '../clock.js';
-import type { Repository } from '../db/repository.js';
+import type { DailyCounts, Repository } from '../db/repository.js';
 import type { Logger } from '../observability/logger.js';
-import type { Metrics } from '../observability/metrics.js';
 import { assignVariant } from './bucketing.js';
-import { chiSquareGoodnessOfFit, compareProportions, wilsonInterval, type Comparison, type Interval } from './stats.js';
+import { compareProportions, sampleRatioCheck, wilsonInterval, type Comparison, type Interval, type SampleRatioCheck } from './stats.js';
 
-/** Below this many exposures in any variant, results are shown as still collecting. */
+/** Below this many exposures in either arm, results are shown as still collecting. */
 export const MIN_EXPOSURES_PER_VARIANT = 100;
 export const SIGNIFICANCE_LEVEL = 0.05;
 /** SRM is a data quality alarm, so it uses a strict threshold to keep false alarms rare. */
@@ -30,19 +29,18 @@ export interface VariantResult {
 }
 
 export interface ExperimentResults {
-  experiment: ExperimentConfig;
   status: 'COLLECTING' | 'READY';
   minExposuresPerVariant: number;
   totalExposures: number;
   variants: VariantResult[];
-  sampleRatio: { chiSquare: number; pValue: number; mismatch: boolean };
+  sampleRatio: SampleRatioCheck & { mismatch: boolean };
+  daily: DailyCounts[];
 }
 
 export interface ExperimentServiceDeps {
   repo: Repository;
   clock: Clock;
   logger: Logger;
-  metrics: Metrics;
 }
 
 export class ExperimentService {
@@ -63,57 +61,53 @@ export class ExperimentService {
    */
   logExposure(userId: string, key: ExperimentKey): { assignment: Assignment; firstExposure: boolean } {
     const assignment = this.assign(userId, key);
-    const firstExposure = this.#deps.repo.insertExposure({
+    const firstExposure = this.#deps.repo.addExposure({
       experimentKey: key,
       userId,
       variant: assignment.variant,
       firstExposedAt: this.#deps.clock.now().toISOString(),
     });
-    if (firstExposure) {
-      this.#deps.metrics.experimentExposures.inc({ experiment: key, variant: assignment.variant });
-      this.#deps.logger.info({ experiment: key, variant: assignment.variant }, 'exposure');
-    }
+    if (firstExposure) this.#deps.logger.debug({ experiment: key, variant: assignment.variant }, 'exposure');
     return { assignment, firstExposure };
   }
 
   results(key: ExperimentKey): ExperimentResults {
-    const experiment = EXPERIMENTS[key];
-    const counts = new Map(this.#deps.repo.countVariantResults(key, experiment.metric).map((row) => [row.variant, row]));
-    const observed = experiment.variants.map((variant) => ({
+    const experiment: ExperimentConfig = EXPERIMENTS[key];
+    const counts = new Map(this.#deps.repo.variantCounts(key, experiment.metric).map((row) => [row.variant, row]));
+    const [control, treatment] = experiment.variants.map((variant) => ({
       variant,
       exposures: counts.get(variant.key)?.exposures ?? 0,
       conversions: counts.get(variant.key)?.conversions ?? 0,
-    }));
-    const [control] = observed;
-    if (!control) throw new Error(`Experiment ${key} has no variants`);
+    })) as [Arm, Arm];
 
-    const variants = observed.map(({ variant, exposures, conversions }, index): VariantResult => {
-      const comparison = index === 0 ? null : compareProportions(control, { exposures, conversions });
-      return {
-        key: variant.key,
-        label: variant.label,
-        weight: variant.weight,
-        isControl: index === 0,
-        exposures,
-        conversions,
-        rate: exposures === 0 ? 0 : conversions / exposures,
-        interval: wilsonInterval(conversions, exposures),
-        comparison: comparison && { ...comparison, significant: comparison.pValue < SIGNIFICANCE_LEVEL },
-      };
+    const comparison = compareProportions(control, treatment);
+    const toResult = (arm: Arm, isControl: boolean): VariantResult => ({
+      key: arm.variant.key,
+      label: arm.variant.label,
+      weight: arm.variant.weight,
+      isControl,
+      exposures: arm.exposures,
+      conversions: arm.conversions,
+      rate: arm.exposures === 0 ? 0 : arm.conversions / arm.exposures,
+      interval: wilsonInterval(arm.conversions, arm.exposures),
+      comparison: isControl ? null : { ...comparison, significant: comparison.pValue < SIGNIFICANCE_LEVEL },
     });
 
-    const fit = chiSquareGoodnessOfFit(
-      observed.map((row) => row.exposures),
-      experiment.variants.map((variant) => variant.weight),
-    );
-    const totalExposures = observed.reduce((sum, row) => sum + row.exposures, 0);
+    const totalExposures = control.exposures + treatment.exposures;
+    const ratio = sampleRatioCheck(control.exposures, treatment.exposures, control.variant.weight, treatment.variant.weight);
     return {
-      experiment,
-      status: observed.every((row) => row.exposures >= MIN_EXPOSURES_PER_VARIANT) ? 'READY' : 'COLLECTING',
+      status: Math.min(control.exposures, treatment.exposures) >= MIN_EXPOSURES_PER_VARIANT ? 'READY' : 'COLLECTING',
       minExposuresPerVariant: MIN_EXPOSURES_PER_VARIANT,
       totalExposures,
-      variants,
-      sampleRatio: { chiSquare: fit.chiSquare, pValue: fit.pValue, mismatch: totalExposures > 0 && fit.pValue < SRM_THRESHOLD },
+      variants: [toResult(control, true), toResult(treatment, false)],
+      sampleRatio: { ...ratio, mismatch: totalExposures > 0 && ratio.pValue < SRM_THRESHOLD },
+      daily: this.#deps.repo.dailyCounts(key, experiment.metric),
     };
   }
+}
+
+interface Arm {
+  variant: ExperimentConfig['variants'][number];
+  exposures: number;
+  conversions: number;
 }

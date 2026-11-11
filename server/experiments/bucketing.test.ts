@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { EXPERIMENTS, type ExperimentConfig } from '../../shared/experiments.js';
 import { BUCKET_COUNT, assignVariant, bucketFor, hash32 } from './bucketing.js';
-import { chiSquareGoodnessOfFit } from './stats.js';
+import { sampleRatioCheck } from './stats.js';
 
 const users = Array.from({ length: 20_000 }, (_, i) => `user-${String(i)}`);
 
@@ -69,26 +69,22 @@ describe('assignVariant', () => {
   });
 
   it('splits sequential ids 50/50 with no sample ratio mismatch', () => {
-    const observed = split(EXPERIMENTS.landing_hero);
-    expect(chiSquareGoodnessOfFit(observed, [50, 50]).pValue).toBeGreaterThan(0.01);
-    for (const count of observed) expect(Math.abs(count / users.length - 0.5)).toBeLessThan(0.015);
+    const [control = 0, treatment = 0] = split(EXPERIMENTS.landing_hero);
+    expect(sampleRatioCheck(control, treatment, 50, 50).pValue).toBeGreaterThan(0.01);
+    expect(Math.abs(control / users.length - 0.5)).toBeLessThan(0.015);
   });
 
-  it('follows uneven weights across three variants', () => {
+  it('follows uneven weights', () => {
     const experiment: ExperimentConfig = {
-      key: 'three_way',
-      description: 'test',
-      metric: 'membership_started',
-      salt: 's',
+      ...EXPERIMENTS.landing_hero,
       variants: [
-        { key: 'control', label: 'A', weight: 70 },
-        { key: 'b', label: 'B', weight: 20 },
-        { key: 'c', label: 'C', weight: 10 },
+        { key: 'control', label: 'A', weight: 90 },
+        { key: 'b', label: 'B', weight: 10 },
       ],
     };
-    const observed = split(experiment);
-    expect(chiSquareGoodnessOfFit(observed, [70, 20, 10]).pValue).toBeGreaterThan(0.01);
-    expect((observed[2] ?? 0) / users.length).toBeCloseTo(0.1, 1);
+    const [control = 0, treatment = 0] = split(experiment);
+    expect(sampleRatioCheck(control, treatment, 90, 10).pValue).toBeGreaterThan(0.01);
+    expect(treatment / users.length).toBeCloseTo(0.1, 1);
   });
 
   it('puts everyone in a variant with all the weight', () => {

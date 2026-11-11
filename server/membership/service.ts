@@ -3,7 +3,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { PLANS, type BillingInterval, type PlanId } from '../../shared/plans.js';
 import { addDays, type Clock } from '../clock.js';
 import type { MembershipHistoryRow, MembershipRow, Repository } from '../db/repository.js';
-import { IdempotencyKeyReusedError, IdempotencyStore, KeyedMutex, RequestInProgressError } from '../idempotency.js';
+import { IdempotencyKeyReusedError, IdempotencyStore, KeyedMutex } from '../idempotency.js';
 import type { Logger } from '../observability/logger.js';
 import type { Metrics } from '../observability/metrics.js';
 import {
@@ -17,12 +17,7 @@ import { MAX_FAILED_CHARGES, transition, type MembershipEvent } from './state-ma
 
 export const CONVERSION_METRIC = 'membership_started';
 
-export type UserErrorCode =
-  | 'PAYMENT_DECLINED'
-  | 'ALREADY_MEMBER'
-  | 'NOT_A_MEMBER'
-  | 'IDEMPOTENCY_KEY_REUSED'
-  | 'REQUEST_IN_PROGRESS';
+export type UserErrorCode = 'PAYMENT_DECLINED' | 'ALREADY_MEMBER' | 'NOT_A_MEMBER' | 'IDEMPOTENCY_KEY_REUSED';
 
 export interface UserError {
   code: UserErrorCode;
@@ -30,7 +25,7 @@ export interface UserError {
 }
 
 /**
- * What a membership mutation stores against its idempotency key and replays on a repeat.
+ * What a membership mutation remembers against its idempotency key and replays on a repeat.
  * It names the membership rather than copying it, so a replay shows the membership as it is now.
  */
 export interface MembershipOutcome {
@@ -83,8 +78,8 @@ export class MembershipService {
   readonly #logger: Logger;
   readonly #metrics: Metrics;
   readonly #retry: RetryPolicy;
-  readonly #idempotency: IdempotencyStore;
-  /** One process owns the database, so a per-user lock is enough to stop two tabs racing a charge. */
+  readonly #idempotency = new IdempotencyStore();
+  /** Stops two tabs with different keys from both charging: one membership change per user at a time. */
   readonly #locks = new KeyedMutex();
 
   constructor(deps: MembershipServiceDeps) {
@@ -94,7 +89,6 @@ export class MembershipService {
     this.#logger = deps.logger;
     this.#metrics = deps.metrics;
     this.#retry = deps.retry ?? DEFAULT_RETRY;
-    this.#idempotency = new IdempotencyStore(deps.repo, deps.clock);
   }
 
   latest(userId: string): MembershipRow | undefined {
@@ -149,11 +143,9 @@ export class MembershipService {
         failedChargeCount: 0,
         updatedAt: now.toISOString(),
       };
-      this.#repo.transaction(() => {
-        this.#repo.insertMembership(row);
-        this.#record(row, 'STARTED', null, withTrial ? 'No charge until the trial ends' : 'Charged at signup');
-        this.#repo.insertConversion({ userId, metric: CONVERSION_METRIC, at: row.startedAt });
-      });
+      this.#repo.saveMembership(row);
+      this.#record(row, 'STARTED', null, withTrial ? 'No charge until the trial ends' : 'Charged at signup');
+      this.#repo.addConversion({ userId, metric: CONVERSION_METRIC, at: row.startedAt });
       this.#logger.info({ membershipId: row.id, planId: plan.id, status: row.status }, 'membership started');
       return { membershipId: row.id, error: null };
     });
@@ -177,20 +169,15 @@ export class MembershipService {
 
       const now = this.#clock.now();
       const base: MembershipRow = { ...row, paymentMethod: input.paymentMethod, updatedAt: now.toISOString() };
-      this.#repo.transaction(() => {
-        if (charge.status === 'succeeded') {
-          this.#apply(base, 'CHARGE_SUCCEEDED', {
-            failedChargeCount: 0,
-            currentPeriodEnd: addInterval(now, plan.interval).toISOString(),
-          });
-          return;
-        }
+      if (charge.status === 'succeeded') {
+        this.#apply(base, 'CHARGE_SUCCEEDED', { failedChargeCount: 0, currentPeriodEnd: addInterval(now, plan.interval).toISOString() });
+      } else {
         const failedChargeCount = row.failedChargeCount + 1;
         const pastDue = this.#apply(base, 'CHARGE_FAILED', { failedChargeCount });
         if (failedChargeCount >= MAX_FAILED_CHARGES) {
           this.#apply(pastDue, 'GRACE_EXPIRED', { cancelledAt: now.toISOString() }, `${failedChargeCount} failed charges`);
         }
-      });
+      }
       return { membershipId: row.id, error: null };
     });
   }
@@ -200,7 +187,7 @@ export class MembershipService {
       const row = this.#repo.findLiveMembership(userId);
       if (!row) return Promise.resolve(failure('NOT_A_MEMBER', 'There is no active membership to cancel.'));
       const now = this.#clock.now().toISOString();
-      this.#repo.transaction(() => this.#apply({ ...row, updatedAt: now }, 'CANCEL', { cancelledAt: now }));
+      this.#apply({ ...row, updatedAt: now }, 'CANCEL', { cancelledAt: now });
       return Promise.resolve({ membershipId: row.id, error: null });
     });
   }
@@ -217,7 +204,6 @@ export class MembershipService {
       return await this.#locks.run(userId, () => this.#idempotency.run(`${operation}:${userId}`, key, input, work));
     } catch (error) {
       if (error instanceof IdempotencyKeyReusedError) return failure('IDEMPOTENCY_KEY_REUSED', error.message);
-      if (error instanceof RequestInProgressError) return failure('REQUEST_IN_PROGRESS', error.message);
       throw error;
     }
   }
@@ -247,15 +233,14 @@ export class MembershipService {
     const result = transition(row.status, event);
     if (!result.ok) throw result.error;
     const next: MembershipRow = { ...row, ...patch, status: result.status };
-    this.#repo.updateMembership(next);
+    this.#repo.saveMembership(next);
     this.#record(next, event, row.status, detail);
-    this.#metrics.membershipTransitions.inc({ event, from: row.status, to: next.status });
     this.#logger.info({ membershipId: row.id, event, from: row.status, to: next.status }, 'membership transition');
     return next;
   }
 
   #record(row: MembershipRow, event: MembershipHistoryRow['event'], from: MembershipRow['status'] | null, detail: string | null): void {
-    this.#repo.insertHistory({
+    this.#repo.addHistory({
       id: randomUUID(),
       membershipId: row.id,
       event,

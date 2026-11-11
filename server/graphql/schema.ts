@@ -20,7 +20,9 @@ export const typeDefs = /* GraphQL */ `
   enum MembershipHistoryEvent { STARTED CHARGE_SUCCEEDED CHARGE_FAILED GRACE_EXPIRED CANCEL }
   "Payment methods of the fake provider. No real card data exists anywhere in this app."
   enum DemoPaymentMethod { CARD_OK CARD_DECLINES }
-  enum UserErrorCode { PAYMENT_DECLINED ALREADY_MEMBER NOT_A_MEMBER IDEMPOTENCY_KEY_REUSED REQUEST_IN_PROGRESS }
+  enum UserErrorCode { PAYMENT_DECLINED ALREADY_MEMBER NOT_A_MEMBER IDEMPOTENCY_KEY_REUSED }
+  enum VitalName { LCP INP CLS FCP TTFB }
+  enum VitalRating { GOOD NEEDS_IMPROVEMENT POOR }
   enum ResultsStatus { COLLECTING READY }
 
   type Plan {
@@ -125,9 +127,28 @@ export const typeDefs = /* GraphQL */ `
   }
 
   type SampleRatioCheck {
-    chiSquare: Float!
+    "Share of exposures the control actually got."
+    observedShare: Float!
+    "Share the control should get from the weights."
+    expectedShare: Float!
     pValue: Float!
     mismatch: Boolean!
+  }
+
+  "New exposures and conversions for one variant on one UTC day."
+  type DailyCount {
+    date: String!
+    variant: String!
+    exposures: Int!
+    conversions: Int!
+  }
+
+  type WebVital {
+    name: VitalName!
+    "75th percentile of recent samples: milliseconds, or unitless for CLS."
+    p75: Float!
+    samples: Int!
+    rating: VitalRating!
   }
 
   type ExperimentResults {
@@ -136,6 +157,7 @@ export const typeDefs = /* GraphQL */ `
     totalExposures: Int!
     variants: [VariantResult!]!
     sampleRatio: SampleRatioCheck!
+    daily: [DailyCount!]!
   }
 
   type Query {
@@ -145,6 +167,8 @@ export const typeDefs = /* GraphQL */ `
     assignment(experimentKey: String!): Assignment!
     experiments: [Experiment!]!
     experiment(key: String!): Experiment
+    "Field performance from real page loads on this server."
+    webVitals: [WebVital!]!
   }
 
   input StartMembershipInput {
@@ -205,6 +229,8 @@ export const resolvers = {
       context.services.experiments.assign(requireUser(context), requireExperiment(args.experimentKey)),
     experiments: () => EXPERIMENT_KEYS.map((key) => EXPERIMENTS[key]),
     experiment: (_: unknown, args: { key: string }) => (isExperimentKey(args.key) ? EXPERIMENTS[args.key] : null),
+    webVitals: (_: unknown, __: NoArgs, context: GraphQLContext) =>
+      context.services.vitals.summary().map((vital) => ({ ...vital, rating: vital.rating.toUpperCase().replace('-', '_') })),
   },
   Mutation: {
     logExposure: (_: unknown, args: { experimentKey: string }, context: GraphQLContext) =>

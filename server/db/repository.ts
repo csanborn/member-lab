@@ -20,12 +20,10 @@ export interface MembershipRow {
   updatedAt: IsoTime;
 }
 
-export type HistoryEvent = 'STARTED' | MembershipEvent;
-
 export interface MembershipHistoryRow {
   id: string;
   membershipId: string;
-  event: HistoryEvent;
+  event: 'STARTED' | MembershipEvent;
   fromStatus: MembershipStatus | null;
   toStatus: MembershipStatus;
   at: IsoTime;
@@ -45,40 +43,26 @@ export interface VariantCounts {
   conversions: number;
 }
 
-export interface IdempotencyRow {
-  scope: string;
-  key: string;
-  requestHash: string;
-  state: 'pending' | 'complete';
-  /** JSON of the stored result, once complete. */
-  response: string | null;
-  createdAt: IsoTime;
+/** New exposures and conversions per variant per UTC day. Conversions land on the day they happened. */
+export interface DailyCounts extends VariantCounts {
+  date: string;
 }
 
-/** The only door to storage. Every method is synchronous: one process owns the database. */
+/** The only door to storage, so swapping the in-memory store for a database touches one file. */
 export interface Repository {
-  ping(): boolean;
-  transaction<T>(fn: () => T): T;
-  close(): void;
-
   findLiveMembership(userId: string): MembershipRow | undefined;
   findLatestMembership(userId: string): MembershipRow | undefined;
   findMembership(id: string): MembershipRow | undefined;
   hasHadTrial(userId: string): boolean;
-  insertMembership(row: MembershipRow): void;
-  updateMembership(row: MembershipRow): void;
-  insertHistory(row: MembershipHistoryRow): void;
+  /** Inserts or replaces by id. */
+  saveMembership(row: MembershipRow): void;
+  addHistory(row: MembershipHistoryRow): void;
   listHistory(membershipId: string): MembershipHistoryRow[];
 
   /** Records the first exposure only. Returns false if this user was already exposed. */
-  insertExposure(row: ExposureRow): boolean;
-  insertConversion(conversion: { userId: string; metric: string; at: IsoTime }): void;
+  addExposure(row: ExposureRow): boolean;
+  addConversion(conversion: { userId: string; metric: string; at: IsoTime }): void;
   /** Exposed users per variant, and how many of them converted at or after their first exposure. */
-  countVariantResults(experimentKey: string, metric: string): VariantCounts[];
-
-  findIdempotency(scope: string, key: string): IdempotencyRow | undefined;
-  /** Returns false if the key is already claimed. */
-  claimIdempotency(row: Omit<IdempotencyRow, 'state' | 'response'>): boolean;
-  completeIdempotency(scope: string, key: string, response: string): void;
-  releaseIdempotency(scope: string, key: string): void;
+  variantCounts(experimentKey: string, metric: string): VariantCounts[];
+  dailyCounts(experimentKey: string, metric: string): DailyCounts[];
 }

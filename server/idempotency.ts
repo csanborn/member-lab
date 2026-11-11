@@ -1,6 +1,4 @@
 import { createHash } from 'node:crypto';
-import type { Clock } from './clock.js';
-import type { Repository } from './db/repository.js';
 
 export class IdempotencyKeyReusedError extends Error {
   constructor() {
@@ -8,16 +6,6 @@ export class IdempotencyKeyReusedError extends Error {
     this.name = 'IdempotencyKeyReusedError';
   }
 }
-
-export class RequestInProgressError extends Error {
-  constructor() {
-    super('A request with this idempotency key is still running');
-    this.name = 'RequestInProgressError';
-  }
-}
-
-/** A claim older than this with no live request behind it is from a crashed process and may be taken over. */
-const STALE_CLAIM_MS = 60_000;
 
 /** JSON with sorted object keys, so equal inputs always hash the same. */
 function stableStringify(value: unknown): string {
@@ -35,71 +23,34 @@ export function hashRequest(input: unknown): string {
   return createHash('sha256').update(stableStringify(input)).digest('hex');
 }
 
-interface InFlight {
-  requestHash: string;
-  promise: Promise<unknown>;
-}
-
 /**
- * Runs an operation at most once per (scope, key).
+ * Runs an operation at most once per (scope, key) and remembers its result.
  *
- * - First call claims the key, runs, and stores the JSON result.
- * - A repeat with the same input gets the stored result. With different input it is rejected.
- * - A repeat that arrives while the first is still running waits for and shares its result.
- * - If the operation throws, the claim is released so the caller can retry.
+ * - The first call runs the operation and stores the promise of its result.
+ * - A repeat with the same input gets that same promise: the stored result if it has finished,
+ *   or a share of the running one if it has not. A double click therefore runs once.
+ * - The same key with different input is rejected, since it is almost always a client bug.
+ * - If the operation throws, the key is forgotten so the client can retry.
  *
- * Results must survive a JSON round trip. Callers decide what counts as a result (stored and
- * replayed) and what counts as an error (released and retryable).
+ * Keys live in memory for the life of the process. A real service would keep them in its
+ * database with an expiry, so they survive restarts and are shared between instances.
  */
 export class IdempotencyStore {
-  readonly #repo: Repository;
-  readonly #clock: Clock;
-  readonly #inFlight = new Map<string, InFlight>();
+  readonly #entries = new Map<string, { requestHash: string; result: Promise<unknown> }>();
 
-  constructor(repo: Repository, clock: Clock) {
-    this.#repo = repo;
-    this.#clock = clock;
-  }
-
-  async run<T>(scope: string, key: string, input: unknown, operation: () => Promise<T>): Promise<T> {
-    const requestHash = hashRequest(input);
+  run<T>(scope: string, key: string, input: unknown, operation: () => Promise<T>): Promise<T> {
     const id = `${scope}\u0000${key}`;
-
-    const running = this.#inFlight.get(id);
-    if (running) {
-      if (running.requestHash !== requestHash) throw new IdempotencyKeyReusedError();
-      return running.promise as Promise<T>;
-    }
-
-    const existing = this.#repo.findIdempotency(scope, key);
+    const requestHash = hashRequest(input);
+    const existing = this.#entries.get(id);
     if (existing) {
-      if (existing.requestHash !== requestHash) throw new IdempotencyKeyReusedError();
-      if (existing.state === 'complete' && existing.response !== null) return JSON.parse(existing.response) as T;
-      const age = this.#clock.now().getTime() - Date.parse(existing.createdAt);
-      if (age < STALE_CLAIM_MS) throw new RequestInProgressError();
-      this.#repo.releaseIdempotency(scope, key);
+      if (existing.requestHash !== requestHash) return Promise.reject(new IdempotencyKeyReusedError());
+      return existing.result as Promise<T>;
     }
 
-    if (!this.#repo.claimIdempotency({ scope, key, requestHash, createdAt: this.#clock.now().toISOString() })) {
-      throw new RequestInProgressError();
-    }
-
-    const promise = operation().then(
-      (result) => {
-        this.#repo.completeIdempotency(scope, key, JSON.stringify(result));
-        return result;
-      },
-      (error: unknown) => {
-        this.#repo.releaseIdempotency(scope, key);
-        throw error;
-      },
-    );
-    this.#inFlight.set(id, { requestHash, promise });
-    try {
-      return await promise;
-    } finally {
-      this.#inFlight.delete(id);
-    }
+    const result = operation();
+    this.#entries.set(id, { requestHash, result });
+    void result.catch(() => this.#entries.delete(id));
+    return result;
   }
 }
 

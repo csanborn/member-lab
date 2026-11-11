@@ -2,25 +2,25 @@
   "name": "member-lab",
   "version": "0.1.0",
   "private": true,
-  "description": "A full stack TypeScript demo of a paid membership program: signup flows, a home-grown experimentation layer, idempotent APIs, tests and monitoring.",
+  "description": "A front-end membership demo in React and TypeScript: signup flows, client-rendered A/B variants, an experiment results page, and a deliberately small GraphQL API.",
   "license": "MIT",
   "author": "Chris Sanborn",
   "type": "module",
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.12.0"
   },
   "scripts": {
     "dev": "concurrently -k -n api,web -c blue,magenta \"npm:dev:api\" \"npm:dev:web\"",
-    "dev:api": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx watch server/main.ts",
+    "dev:api": "tsx watch server/main.ts",
     "dev:web": "vite",
     "build": "vite build",
-    "start": "NODE_ENV=production NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx server/main.ts",
-    "simulate": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx scripts/simulate.ts",
+    "start": "NODE_ENV=production tsx server/main.ts",
     "typecheck": "tsc -p tsconfig.app.json && tsc -p tsconfig.node.json",
     "lint": "eslint . --max-warnings 0",
-    "test": "NODE_OPTIONS=--disable-warning=ExperimentalWarning vitest run",
+    "test": "vitest run",
     "test:e2e": "playwright test",
-    "screenshot": "playwright test -c playwright.screenshot.config.ts"
+    "screenshot": "playwright test -c playwright.screenshot.config.ts",
+    "budget": "tsx scripts/check-budget.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.107.1",

@@ -5,11 +5,12 @@ import { MembershipService, type RetryPolicy } from './membership/service.js';
 import type { Logger } from './observability/logger.js';
 import type { Metrics } from './observability/metrics.js';
 import type { PaymentProvider } from './payments/provider.js';
+import { VitalsStore } from './vitals.js';
 
 export interface Services {
-  repo: Repository;
   memberships: MembershipService;
   experiments: ExperimentService;
+  vitals: VitalsStore;
 }
 
 export interface ServiceDeps {
@@ -23,8 +24,8 @@ export interface ServiceDeps {
 
 export function createServices(deps: ServiceDeps): Services {
   return {
-    repo: deps.repo,
     memberships: new MembershipService(deps),
     experiments: new ExperimentService(deps),
+    vitals: new VitalsStore(),
   };
 }
