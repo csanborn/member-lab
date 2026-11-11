@@ -17,6 +17,8 @@ npm run dev
 
 Open http://localhost:5173. The API runs on port 4000 behind Vite's proxy. There are no keys, accounts or databases to set up.
 
+To host it, create a Blueprint on [Render](https://render.com) from this repo. `render.yaml` sets up one free web service that builds the app and serves it with the API.
+
 | Page | What to try |
 | --- | --- |
 | `/` | The hero is one of two experiment variants. "Start over as a new visitor" in the footer gets a new id, which may land in the other one. |
