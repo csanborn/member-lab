@@ -1,43 +1,82 @@
 # member-lab spec
 
-A full stack TypeScript demo of a paid membership program, "Crate Club", for a fictional neighborhood delivery service called Corner Crate. It exists to show the work behind a membership product: signup and conversion flows, an experimentation layer built from first principles, APIs that stay correct under retries and failures, and the tests and monitoring that keep all of it honest.
+A front-end project for a paid membership program, "Crate Club", for a fictional neighborhood delivery service called Corner Crate. It exists to show front-end product engineering on a membership: conversion flows, A/B test variants rendered in the browser with correct exposure logging, an experiment results page that is honest about its statistics, and the state management, performance and accessibility work behind them. A deliberately small API supports it.
 
 Corner Crate, Crate Club and every price, perk and user in this repo are invented.
 
 ## Goals
 
-- **Membership lifecycle.** A visitor can join, see their membership and cancel. Status follows an explicit state machine: `TRIAL`, `ACTIVE`, `PAST_DUE`, `CANCELLED`.
-- **Money is never double counted.** Signup, billing and cancel take an idempotency key. Retries, double clicks and a payment response lost in transit never create a second membership or a second charge.
-- **Experiments.** Users are bucketed by a deterministic hash. An exposure is logged only when a variant is actually rendered. Conversions are joined to exposures on the server. A results view reports conversion rate per variant, lift with a confidence interval, a two-proportion z-test and a sample ratio mismatch (SRM) check.
-- **Believable data.** A seeded traffic simulator fills the experiments and memberships with data that looks like a real two-week test, through the same services the API uses.
-- **Observability.** Structured JSON logs with a request id, a Prometheus `/metrics` endpoint with request rate, error rate and latency, and one alert rule with a runbook.
-- **Runs anywhere.** `npm install && npm run dev` works with no keys, no accounts and no database server.
+- **Front end first.** Most of the effort goes into the React app: flows, data fetching, experiment rendering, charts, performance and accessibility.
+- **Membership flows.** A visitor can join, see their membership, run demo billing and cancel. Status follows a small state machine: `TRIAL`, `ACTIVE`, `PAST_DUE`, `CANCELLED`.
+- **Correct experiments in the browser.** Variants are rendered client side. An exposure is logged only after a variant has rendered. The results page reports conversion rate per variant with intervals, lift with an interval, a p-value, a sample ratio mismatch (SRM) warning and a daily trend.
+- **Money is never double counted.** Signup, billing and cancel take an idempotency key from the browser, so retries and double clicks run once.
+- **Measured performance.** Route-level code splitting, a gzipped bundle budget enforced in CI, and Core Web Vitals reported from real page loads.
+- **Runs anywhere.** `npm install && npm run dev` works with no keys, accounts or database, and the results page already has data.
 
 ## Non-goals
 
+- Backend depth: no database tuning, queues, sharding, multi-instance coordination or schedulers. The API is in-memory and resets on restart.
 - Real payments, real authentication or real users. Identity is an anonymous visitor id kept in the browser and sent as a header.
-- A production deployment, a feature flag service or a third-party experimentation SDK.
-- Multi-instance concurrency. One Node process owns the SQLite file. The idempotency design notes what a shared store would need.
+- A feature flag service or third-party experimentation SDK.
 - Imitating any real delivery service, membership program or brand: no real names, logos, colors, layouts or copy.
 
 ## Stack
 
-- Server: Node 22 and TypeScript, GraphQL Yoga over `node:http`, SQLite through `node:sqlite` behind a small repository interface, `prom-client`, `pino`.
-- Web: React 19, TypeScript, TanStack Query, React Router, Vite. Plain CSS with design tokens.
-- Tests: Vitest (unit, API, component), Playwright with axe for the journey and accessibility.
+- Web: React 19, TypeScript, TanStack Query, React Router, Vite, plain CSS with design tokens, `web-vitals`.
+- API: Node 22 and TypeScript, GraphQL Yoga over `node:http`, an in-memory repository behind a small interface, `pino`, `prom-client`.
+- Tests: Vitest (unit, component with Testing Library, API), Playwright with axe.
 
-## Membership
+## Web app
 
-### Plans
+### Pages
 
-| Plan | Price | Trial |
-| --- | --- | --- |
-| Monthly | $9.99 a month | 30 days free, first membership only |
-| Annual | $79 a year | None, charged at signup |
+- `/`: landing page. The hero is the `landing_hero` variant: a perks headline (control) or a savings calculator. Perks, plan prices, FAQ, call to action.
+- `/join`: plan choice (default plan from `signup_default_plan`), demo payment method, submit. Declines are announced. Double submit is harmless.
+- `/member`: status, plan, dates, perks, history, demo billing controls, and cancel with a confirmation dialog.
+- `/experiments`: per experiment a verdict, a results table, an interval chart and a cumulative trend chart; then a Web Vitals panel.
 
-### State machine
+### Data and state
 
-A pure function `transition(status, event)` returns the next status or an `InvalidTransition` error. Nothing else writes a status.
+- All server state goes through TanStack Query. Query keys include the visitor id. Plans and assignments are cached for the visit. Results poll every 15 seconds.
+- Hovering or focusing the call to action prefetches the signup form's data.
+- Mutations retry only transient failures (network, 5xx), reusing the same idempotency key.
+- Cancel is optimistic with rollback and an error message. Signup and billing wait for the server.
+- A render error in a page shows a recoverable error view instead of a blank app.
+
+### Experiments in the browser
+
+- `assignment` is a pure read. The variant component calls `logExposure` from an effect after it renders, once per visitor per experiment per page load. The server recomputes the variant and keeps only the first exposure.
+- A failed assignment falls back to the control copy without logging an exposure.
+
+### Performance
+
+- The member and results pages are lazy-loaded chunks, preloaded on hover or focus of their links.
+- `npm run budget` fails if the entry script exceeds 110 KB gzipped, the CSS 8 KB, or any lazy chunk 30 KB.
+- LCP, INP, CLS, FCP and TTFB are sent with `sendBeacon` to `/vitals`. The results page shows the 75th percentile of recent samples, rated against Google's thresholds.
+
+### Accessibility (WCAG 2.1 AA)
+
+- Semantic landmarks and headings, labeled controls, visible focus, 4.5:1 text contrast.
+- Native `<dialog>` for confirmation. Focus moves to the main region on navigation and to the heading after cancelling.
+- Live regions for async results. Charts have a text summary and a data table.
+- `prefers-reduced-motion` respected.
+
+## Experiments
+
+- Config in code: key, description, a control and one treatment with weights, metric, salt.
+- **Bucketing:** `hash32(salt + ":" + experimentKey + ":" + userId) mod 10000`, where `hash32` is FNV-1a with the MurmurHash3 finalizer, mapped onto the weights.
+- **Conversion:** starting a membership records `membership_started`. It counts only if at or after the visitor's first exposure.
+- **Statistics** (small pure modules with unit tests): Wilson 95% interval per rate; two-proportion z-test (pooled) for the p-value and an unpooled 95% interval on the lift; SRM as a one-proportion z-test on the control's share of exposures, flagged below p = 0.001. Normal tail probabilities use the Abramowitz and Stegun erf approximation.
+- Under 100 exposures in either arm the result is "collecting". An SRM overrides any verdict.
+- A daily series (new exposures and conversions per variant per day) feeds the cumulative trend chart.
+- **Simulator:** on startup the API plays 24,000 seeded visitors through the real services over a simulated 45 days ending now. It plants a bug that drops 12% of exposures in one arm of `signup_default_plan`, so the SRM warning has something to catch.
+
+## API
+
+- GraphQL: `viewer`, `plans`, `assignment`, `experiments` (with results and daily series), `webVitals`; mutations `logExposure`, `startMembership`, `cancelMembership`, `runBilling`.
+- Business outcomes (declined, already a member, not a member, key reused) are returned as data, not GraphQL errors.
+
+### Membership state machine
 
 | From | `CHARGE_SUCCEEDED` | `CHARGE_FAILED` | `GRACE_EXPIRED` | `CANCEL` |
 | --- | --- | --- | --- | --- |
@@ -46,64 +85,31 @@ A pure function `transition(status, event)` returns the next status or an `Inval
 | `PAST_DUE` | `ACTIVE` | `PAST_DUE` | `CANCELLED` | `CANCELLED` |
 | `CANCELLED` | invalid | invalid | invalid | invalid |
 
-- A monthly signup that is trial eligible starts in `TRIAL` with no charge. Any other signup charges first and starts `ACTIVE` only if the charge succeeds. A declined signup creates no membership.
-- Every transition is written to an append-only event log with from, to, event and time.
-- Billing (end of trial, renewal, retry) is triggered on demand by a demo control, since the demo has no scheduler. The third failed charge in a row applies `GRACE_EXPIRED`.
-- At most one membership per user is not `CANCELLED`, enforced by a partial unique index as well as in code.
+- A first monthly membership starts in `TRIAL` with no charge. Annual plans and rejoining members are charged at signup and start `ACTIVE` only if the charge succeeds.
+- The third failed charge in a row applies `GRACE_EXPIRED`.
 
 ### Idempotency
 
-- `startMembership`, `cancelMembership` and `runBilling` require a client generated `idempotencyKey`. The web app makes one key per user intent and reuses it on every retry of that intent.
-- The first request with a key claims it. A repeat with the same key and the same input returns the stored result without running again. The same key with different input is rejected with `IDEMPOTENCY_KEY_REUSED`. A repeat that arrives while the first is still running shares the first one's result.
-- Business outcomes (success, declined, not a member) are stored and replayed. Unexpected errors release the key so the client can retry.
-- Every charge passes an idempotency key to the payment provider, derived from the request key, so a retry after a lost response returns the original charge instead of making a second one.
+- The first request with a key runs. A repeat with the same input gets the same result, including one that arrives while the first is still running. The same key with different input is rejected. A thrown error forgets the key so the client can retry.
+- Each charge passes a provider key derived from the request key, so a retry after a lost response returns the original charge.
+- One membership change per user at a time, so two tabs with different keys cannot both charge.
 
 ### Fake payment provider
 
-- In memory, with a ledger of charges keyed by idempotency key.
-- Demo payment methods: a card that succeeds and a card that declines.
-- Injectable failures: decline, transient error before charging, and lost response (charge recorded, then the call fails). Optional latency.
-- The membership service retries transient provider failures with backoff, reusing the same provider key.
+- In memory, with a ledger keyed by idempotency key. A card that succeeds and a card that declines. Injectable decline, transient error and lost response. The service retries transient errors with backoff.
 
-## Experiments
+## Monitoring
 
-- Config lives in code: key, description, variants with weights, primary metric, and a salt.
-- **Bucketing:** `bucket = hash32(salt + ":" + experimentKey + ":" + userId) mod 10000`, where `hash32` is FNV-1a with the MurmurHash3 finalizer, mapped onto cumulative variant weights. Same input, same variant, always. The split is close to the weights over many users.
-- **Assignment** (`assignment` query) is a pure read and logs nothing.
-- **Exposure** (`logExposure` mutation) is called by the variant component after it renders. The server recomputes the variant (it never trusts the client's), and records the first exposure per user per experiment.
-- **Conversion:** starting a membership records a `membership_started` event. A conversion counts for an experiment only if it happened at or after that user's first exposure.
-- **Results** per variant: exposed users, converted users, rate with a 95% Wilson interval, absolute and relative lift against control with a 95% interval on the difference, and a two-sided two-proportion z-test p-value. An SRM chi-square test compares exposures to the configured weights and flags p below 0.001. Fewer than 100 exposures in any variant is shown as "collecting data", not as a result.
-- Two experiments: `landing_hero` (control headline vs a savings calculator) and `signup_default_plan` (monthly vs annual preselected).
-
-### Simulator
-
-- `npm run simulate` writes a seeded, reproducible run into the local database through the real services, with a simulated clock across 14 days.
-- Visitors land, some leave before a variant renders, some convert at a rate that depends on their variant, some pick annual, some decline, some trials renew, fail or cancel.
-- It deliberately drops a small share of exposures in one arm of `signup_default_plan` to show the SRM check catching a broken logging path.
-
-## Web
-
-- `/`: landing page. The hero is the `landing_hero` variant. Perks, plan prices, FAQ, and a call to action.
-- `/join`: plan choice (default plan from `signup_default_plan`), demo payment method, submit. Declines are announced. Double submit is harmless.
-- `/member`: status, plan, dates, perks, the event history, demo billing controls, and cancel with a confirmation dialog.
-- `/experiments`: results for each experiment with an interval chart and a plain language verdict.
-- Visitor controls: show the visitor id and start over as a new visitor.
-- Data fetching through TanStack Query: queries keyed by visitor, mutations update the cache from their payload, retries reuse the idempotency key.
-- WCAG 2.1 AA: semantic landmarks, labeled controls, visible focus, 4.5:1 text contrast, keyboard operable dialog, live regions for async results, `prefers-reduced-motion` respected.
-
-## Observability
-
-- Logs: one JSON line per request with request id, method, path, status, duration and GraphQL operation name. Domain events (membership transitions, charges, exposures) log with the same request id. The request id is returned in `x-request-id`.
-- `/metrics` (Prometheus text): `http_requests_total`, `http_request_duration_seconds`, `graphql_operations_total` with an `outcome` label, `graphql_operation_duration_seconds`, `payment_charges_total`, `membership_transitions_total`, `experiment_exposures_total`, plus Node process metrics.
-- `/healthz` returns 200 when the database answers.
-- `ops/alerts.yml`: one Prometheus rule, `GraphQLErrorRateHigh`, with a runbook in the README.
+- One JSON log line per request with a request id, returned in `x-request-id`.
+- `/metrics` (Prometheus): `http_requests_total`, `http_request_duration_seconds`, `graphql_operations_total` with an `outcome` label, `graphql_operation_duration_seconds`, `payment_charges_total`, plus process metrics.
+- `ops/alerts.yml`: `GraphQLErrorRateHigh`, documented in the README.
 
 ## Acceptance criteria
 
-1. `npm install && npm run dev` serves the app and API with no keys; `npm run simulate` fills the results page.
-2. `npm run lint` (0 warnings), `npm run typecheck`, `npm test`, `npm run build` and `npm run test:e2e` pass locally and in GitHub Actions with no secrets.
-3. Unit tests cover every cell of the transition table, bucketing determinism and split, the stats functions against known values, the idempotency store (replay, mismatch, concurrent repeat, release on error), and the membership service under declines, transient failures and lost responses.
-4. API tests drive the real HTTP server: signup, double submit, retry after a lost response (exactly one charge), cancel twice, exposure before and after conversion, results, `/metrics` and `/healthz`.
-5. A component test shows an exposure is logged only after a variant renders, and once.
+1. `npm install && npm run dev` serves the app and API with no keys, and `/experiments` shows seeded results.
+2. `npm run lint` (0 warnings), `npm run typecheck`, `npm test`, `npm run build`, `npm run budget` and `npm run test:e2e` pass locally and in GitHub Actions with no secrets.
+3. Component tests show an exposure is logged only after a variant renders, once, and that an optimistic cancel rolls back with a message when the server refuses.
+4. Unit tests cover bucketing, the stats against reference values, the cumulative series, every cell of the transition table, idempotency and the membership service under declines and lost responses.
+5. API tests drive the real HTTP server: signup, double submit, retry after a lost response (exactly one charge), cancel twice, exposure before and after conversion, Web Vitals beacons and `/metrics`.
 6. A Playwright journey lands, sees a variant, signs up, cancels and finds itself counted on the results page, with no console errors and no axe violations at WCAG 2.1 AA on each page.
-7. The README explains the experiment layer, the state machine, idempotency, the alert and how the project was built, with a screenshot.
+7. The README frames the project as front end with a minimal API, has a Walkthrough of the key decisions in plain language, and a screenshot.

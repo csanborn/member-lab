@@ -1,8 +1,10 @@
 # member-lab
 
-A full stack TypeScript demo of a paid membership program. Crate Club is the membership for Corner Crate, a made-up neighborhood delivery service: visitors land on a page that is running an A/B test, join with a free trial or an annual plan, and can bill or cancel from their member page. Behind it is a GraphQL API that never charges twice, an experimentation layer written from scratch (hash bucketing, exposure logging, a z-test, confidence intervals and a sample ratio mismatch check), and Prometheus metrics with an alert rule. It is built with Node, GraphQL Yoga, SQLite, React 19, TanStack Query and TypeScript (strict).
+A front-end project about the parts of a paid membership that are hard to get right: the signup flow, A/B tests rendered in the browser, and a results page that tells you honestly whether a test won. Crate Club is the membership for Corner Crate, a made-up neighborhood delivery service. Visitors land on a page that is running an experiment, join with a free trial or an annual plan, and can bill or cancel from their member page.
 
-![Experiment results page: the savings calculator wins with a significant lift, and the default plan test is flagged for a sample ratio mismatch](docs/screenshot.png)
+It is built with React 19, TypeScript (strict), TanStack Query and Vite. A deliberately small GraphQL API in Node keeps data in memory and fills itself with simulated traffic on startup, so the results page has something to show.
+
+![Experiment results page: the savings calculator wins with a significant lift, the default plan test is flagged for a sample ratio mismatch, and Core Web Vitals are shown at the 75th percentile](docs/screenshot.png)
 
 Corner Crate, Crate Club, every price, perk and user are invented, and no real payment is ever made.
 
@@ -10,116 +12,112 @@ Corner Crate, Crate Club, every price, perk and user are invented, and no real p
 
 ```sh
 npm install
-npm run simulate   # optional: fills the database with 24,000 simulated visitors
 npm run dev
 ```
 
-Open http://localhost:5173. The API runs on port 4000 and Vite proxies `/graphql`, `/metrics` and `/healthz` to it. There are no keys and no database server: data lives in `data/member-lab.db`, a SQLite file. Run `npm run simulate` before starting the server, or restart the server after it.
+Open http://localhost:5173. The API runs on port 4000 behind Vite's proxy. There are no keys, accounts or databases to set up.
 
 | Page | What to try |
 | --- | --- |
 | `/` | The hero is one of two experiment variants. "Start over as a new visitor" in the footer gets a new id, which may land in the other one. |
 | `/join` | Pick a plan and a demo card. Card B is always declined. Double clicking the button is safe. |
 | `/member` | Status, history, demo billing controls (end the trial, renew, fail a payment) and cancel. |
-| `/experiments` | Live results for both experiments, refreshed every 15 seconds. |
+| `/experiments` | Live results for both experiments, a daily trend, and Web Vitals from your own page loads. |
 
-`npm run build && npm start` serves the built app and the API together on port 4000. GraphiQL is at `/graphql` in development.
+## Walkthrough
 
-| Variable | Default | Does |
-| --- | --- | --- |
-| `PORT` | `4000` | HTTP port |
-| `DB_PATH` | `data/member-lab.db` | SQLite file, or `:memory:` |
-| `LOG_LEVEL` | `info` | pino level |
-| `PAYMENT_LATENCY_MS` | `150` | Fake provider latency |
-| `PAYMENT_TRANSIENT_RATE` | `0` | Share of charges that time out before charging |
-| `PAYMENT_LOST_RESPONSE_RATE` | `0` | Share of charges that succeed and then lose the response |
+The decisions worth talking about, in plain language.
 
-## How the experiment layer works
+**1. An exposure is logged when the variant is on screen, not when it is chosen.** Choosing a variant is a pure read. The component that draws the variant logs the exposure from an effect, and effects only run after React has put the component on the page. A visitor who leaves while the page is still loading is never counted. Counting them would add people who never saw the change, which waters down any real difference. A Strict Mode-safe guard stops repeat requests, and the server keeps only the first exposure anyway. ([useExposure.ts](src/experiments/useExposure.ts))
 
-Experiments are declared in code (`shared/experiments.ts`): a key, a salt, variants with weights and the metric they are judged on. The rest lives in `server/experiments/`.
+**2. Bucketing is a hash, so nothing needs storing.** `hash(salt:experiment:user) mod 10000` gives each visitor a stable number from 0 to 9,999, and the variants' weights split that range. Same visitor, same variant, on any server, forever. Changing the salt reshuffles everyone for a rerun. ([bucketing.ts](server/experiments/bucketing.ts))
 
-- **Bucketing is a pure function.** `hash32(salt:experiment:user) mod 10000` picks one of 10,000 buckets, and the variants' weights are laid end to end over them. The hash is FNV-1a followed by the MurmurHash3 finalizer: FNV-1a alone spreads ids like `user-1`, `user-2` poorly in its low bits, and the finalizer fixes that. Same user, same variant, with nothing stored. Changing the salt reshuffles everyone.
-- **Assignment is not exposure.** The `assignment` query only computes the variant. The variant component calls `logExposure` from an effect, which runs only after it has rendered, so visitors who leave before the hero appears are never counted. The server recomputes the variant rather than trusting the client, and keeps only the first exposure per user.
-- **Conversions are joined on the server.** Starting a membership writes a `membership_started` event. A conversion counts for an experiment only if it happened at or after that user's first exposure, in one SQL query.
-- **The statistics** (`server/experiments/stats.ts`) are implemented directly and tested against reference values:
-  - Wilson score interval for each variant's rate, which behaves at the low rates conversions usually have.
-  - Pooled two-proportion z-test for the p-value, and an unpooled 95% interval for the lift.
-  - Chi-square goodness of fit of exposures against the configured weights for the SRM check, flagged below p = 0.001.
-  - Normal and chi-square tails both come from one regularized incomplete gamma function, so far-tail p-values keep their precision.
-- **The results view** shows "collecting data" until each variant has 100 exposures, and an SRM warning overrides any verdict, because a broken split makes the comparison meaningless.
+**3. The results page answers "can I trust this, and did it win?"** In that order:
+- *Sample ratio mismatch first.* With a 50/50 split, the control should get very close to half the exposures. If it gets 53.6% of 4,300, something is losing or misassigning exposures, and no comparison can be trusted. That warning replaces the verdict. The simulator plants exactly this bug in `signup_default_plan` so you can see it fire.
+- *Then enough data.* Under 100 exposures per variant, the page says "collecting" instead of showing a winner.
+- *Then the comparison.* Each rate gets a 95% Wilson interval, which behaves at low rates where the textbook formula breaks. The lift gets its own interval, and a two-proportion z-test gives the p-value. The verdict is one sentence a product manager can act on.
+- *The trend chart* shows the cumulative rate by day. Early days swing a lot and then settle, which is why you decide on the full planned run, not on a promising day two. ([stats.ts](server/experiments/stats.ts), [Experiments.tsx](src/pages/Experiments.tsx))
 
-`npm run simulate` plays seeded visitors through the same services the API uses, on a simulated clock across 45 days. The savings calculator variant raises click-through, and preselecting the annual plan changes who finishes and what they pick. The simulator also plants a bug: 12% of exposures in one arm of `signup_default_plan` never reach the server. The SRM check catches it, which is the point: that experiment's apparent loss is not a result you should ship on.
+**4. Cancel is optimistic, signup is not.** Cancelling almost always works, so the page shows "Cancelled" at once and puts the membership back if the server says no. Signup moves money and declines are common, so the page waits for the real answer rather than flash a membership that might vanish. Billing waits too: whether the charge works is the thing the visitor wants to know. ([hooks.ts](src/api/hooks.ts))
 
-## How the membership state machine works
+**5. A double click never charges twice.** The browser creates one idempotency key per user intent, such as "join monthly with card A", and sends the same key on every retry of that intent. That includes TanStack Query's automatic retries after a network error. The server runs a key once and replays its answer. Changing the form or getting an answer starts a new key. ([Join.tsx](src/pages/Join.tsx), [idempotency.ts](server/idempotency.ts))
 
-`server/membership/state-machine.ts` is a transition table and a pure `transition(status, event)` function. It is the only thing that decides a new status, and every move is written to an append-only history.
+**6. Server state lives in TanStack Query.** Every query key includes the visitor id, so starting over can never show the previous visitor's data. Prices and assignments are cached for the whole visit because they cannot change. Hovering the call to action prefetches the signup form's data, so the form appears instantly. The results page polls every 15 seconds, and polling pauses in background tabs.
 
-| From | `CHARGE_SUCCEEDED` | `CHARGE_FAILED` | `GRACE_EXPIRED` | `CANCEL` |
+**7. Performance is measured, not assumed.** The member and results pages are split into their own chunks, which start downloading when you hover their links. `npm run budget` fails CI if the entry script grows past 110 KB gzipped (it is about 98, mostly React). The app reports Core Web Vitals from real page loads with `sendBeacon`, and the results page shows their 75th percentile, which is how Google judges a page.
+
+**8. Accessibility is tested, not just intended.** The cancel confirmation is the native `<dialog>`, which traps focus and closes on Escape for free. Focus moves to the main content on navigation and to the page heading after cancelling, async results are announced through live regions, and charts carry a text summary plus a data table. Every page in the Playwright journey is scanned with axe against WCAG 2.1 AA.
+
+**9. The server is small on purpose.** It is a thin GraphQL layer over in-memory maps, so all the interesting work is in the browser. In production I would change three things: store memberships and idempotency keys in a real database (keys with an expiry), let a scheduler run renewals instead of a demo button, and use a lock that works across instances instead of an in-process one.
+
+## How the pieces fit
+
+```
+src/            React app
+  pages/        landing (two hero variants), join, member, experiment results
+  api/          GraphQL client and TanStack Query hooks
+  experiments/  exposure hook, cumulative series for the trend chart
+  components/   charts, dialog, error boundary
+server/         small GraphQL API
+  experiments/  bucketing and stats: small pure modules, unit tested
+  membership/   state machine and service (signup, billing, cancel)
+  simulate/     seeded traffic so the results page has data
+shared/         plan and experiment catalogs used by both sides
+e2e/            Playwright journeys
+ops/            alert rule
+```
+
+### Membership states
+
+A first monthly membership starts as a 30-day free trial with no charge. Annual plans, and anyone who has had a trial, are charged at signup. Status changes only through one small transition table:
+
+| From | Charge succeeds | Charge fails | Third failure in a row | Cancel |
 | --- | --- | --- | --- | --- |
-| `TRIAL` | `ACTIVE` | `PAST_DUE` | invalid | `CANCELLED` |
-| `ACTIVE` | `ACTIVE` | `PAST_DUE` | invalid | `CANCELLED` |
+| `TRIAL` | `ACTIVE` | `PAST_DUE` | | `CANCELLED` |
+| `ACTIVE` | `ACTIVE` | `PAST_DUE` | | `CANCELLED` |
 | `PAST_DUE` | `ACTIVE` | `PAST_DUE` | `CANCELLED` | `CANCELLED` |
-| `CANCELLED` | invalid | invalid | invalid | invalid |
 
-A first monthly membership starts in `TRIAL` without a charge. Annual plans, and anyone who has had a trial, are charged at signup and start `ACTIVE`. The third failed charge in a row cancels the membership. A partial unique index allows one membership per user that is not cancelled.
+### Monitoring
 
-### Never charging twice
-
-- Every mutation takes an `idempotencyKey`. The web app creates one per user intent and reuses it for every retry of that intent, including TanStack Query's automatic retries, so a retry is always safe.
-- `server/idempotency.ts` claims the key in SQLite, runs the work once, stores the result and replays it for any repeat with the same input. A different input with the same key is rejected. A repeat that arrives while the first is still running shares its result. If the work throws, the claim is released so the client can retry.
-- Charges pass a provider key derived from the request key. If the provider charges and the response is lost, the service retries with the same provider key and gets the original charge back instead of a second one.
-- A per-user lock stops two tabs with different keys from both charging. It is in-process because one process owns the database. Several instances would need a row lock or advisory lock in a shared database instead.
-- Business outcomes (declined, already a member) come back as data in the payload, not as GraphQL errors, so they are replayed like any other result and do not count toward the error rate.
-
-## Observability
-
-- **Logs:** one JSON line per request with `requestId`, method, path, status, duration and GraphQL operation name. Domain events (charges, transitions, exposures) carry the same `requestId` through `AsyncLocalStorage`, and it is returned in `x-request-id`.
-- **Metrics** at `/metrics`, in Prometheus format: `http_requests_total` and `http_request_duration_seconds` by route; `graphql_operations_total` (with an `outcome` label) and `graphql_operation_duration_seconds` by operation; `payment_charges_total`, `membership_transitions_total` and `experiment_exposures_total`; plus Node process metrics. A GraphQL error still answers HTTP 200, so the error rate is measured per operation, not per status code.
-- **Health** at `/healthz` checks the database.
+The API logs one JSON line per request and exposes Prometheus metrics at `/metrics`: request rate and latency, GraphQL operations by outcome, and payment calls. A GraphQL error still answers HTTP 200, so the error rate is counted per operation.
 
 ### Alert: GraphQLErrorRateHigh
 
-Defined in [`ops/alerts.yml`](ops/alerts.yml). It fires when more than 2% of executed GraphQL operations fail for 10 minutes, with at least 0.2 operations per second so a quiet night does not page anyone. A unit test checks that the rule only names metrics and labels the server actually exports.
+Defined in [`ops/alerts.yml`](ops/alerts.yml). It fires when more than 2% of GraphQL operations fail for 10 minutes, with enough traffic that one error at night does not page anyone. Declines are returned as data, not errors, so they do not count. To investigate: find the failing operation with `sum by (operation) (rate(graphql_operations_total{outcome="error"}[5m]))`, then search the logs for `unexpected GraphQL error`. If it is signup or billing, check `payment_charges_total{outcome="transient_error"}` for a payment provider outage. Clients retry with the same idempotency key, so nothing needs replaying once it is fixed.
 
-Runbook:
+### Settings
 
-1. Find the failing operation: `sum by (operation) (rate(graphql_operations_total{outcome="error"}[5m]))`.
-2. If it is `StartMembership` or `RunBilling`, check `rate(payment_charges_total{outcome="transient_error"}[5m])`. A spike means the payment provider is failing; the service already retries three times with the same key, so no one is double charged. Wait it out or fail over.
-3. Otherwise, search the logs for `"msg":"unexpected GraphQL error"` and follow its `requestId` through the other lines of that request.
-4. Check `/healthz`. A 503 means the database is unavailable.
-5. Clients retry safely with the same idempotency key, so once the cause is fixed nothing needs replaying.
+| Variable | Default | Does |
+| --- | --- | --- |
+| `PORT` | `4000` | API port |
+| `SEED_VISITORS` | `24000` | Simulated visitors loaded at startup. `0` starts empty. |
+| `PAYMENT_LATENCY_MS` | `150` | Fake payment provider latency |
+| `PAYMENT_TRANSIENT_RATE` | `0` | Share of charges that time out (try `0.3` to watch retries) |
+| `LOG_LEVEL` | `info` | Log level |
+
+`npm run build && npm start` serves the built app and the API together on port 4000.
 
 ## Testing
 
 ```sh
 npm run lint        # ESLint, strict type-checked rules, zero warnings allowed
 npm run typecheck   # tsc, strict
-npm test            # Vitest: unit, API and component tests
+npm test            # Vitest: unit, component and API tests
 npm run build
-npm run test:e2e    # Playwright, Chromium, against the built app on a fresh database
+npm run budget      # gzipped bundle size budget
+npm run test:e2e    # Playwright, Chromium, against the built app
 ```
 
-- **Unit:** every cell of the transition table; bucketing determinism, range and split (checked with the project's own chi-square); the stats functions against reference values; the idempotency store (replay, mismatched input, concurrent repeats, release on error, stale claims, restarts); the membership service under declines, transient failures, lost responses, double submits and racing tabs; exposure and conversion rules; the simulator's reproducibility.
-- **API:** the real HTTP server on a random port, driven over `fetch`: signup, double submit, retry after a lost response (exactly one charge), cancel twice, billing, input errors, exposure before and after conversion, `/metrics`, `/healthz` and request ids.
-- **Component:** the landing page logs an exposure only after a variant renders, once, under Strict Mode, and not at all when the assignment fails.
-- **End to end:** a Playwright journey lands, sees a variant, signs up with a double click, closes the cancel dialog with Escape, cancels, and finds itself counted on the results page. Other journeys cover a declined card and starting over as a new visitor. Every page is checked with axe at WCAG 2.1 AA, and any console error fails the test.
+- **Component:** the landing page logs an exposure only after a variant renders, once, under Strict Mode, and never when the assignment fails. The member page shows a cancellation before the server answers and rolls it back, with a message, when the server refuses.
+- **Unit:** bucketing (stable, in range, close to the weights), the stats against reference values, the cumulative series, every cell of the state machine, idempotent replays and double submits, and the membership service under declines and lost payment responses.
+- **API:** the real HTTP server on a random port: signup, double submit, retry after a lost response (exactly one charge), cancel twice, exposure before and after conversion, Web Vitals beacons and `/metrics`.
+- **End to end:** a Playwright journey lands, sees a variant, double clicks to join, closes the cancel dialog with Escape, cancels, and finds itself counted on the results page. Other journeys cover a declined card and starting over as a new visitor. Every page is checked with axe at WCAG 2.1 AA, and any console error fails the test.
 
-CI runs all of it on every push and pull request, with no secrets. `npm run screenshot` refreshes the image above from a simulated database.
-
-## Project layout
-
-```
-shared/        plan and experiment catalogs used by both sides
-server/        HTTP app, GraphQL schema, services, SQLite repository, observability, simulator
-src/           React app: pages, query hooks, exposure hook
-e2e/           Playwright journeys
-ops/           Prometheus alert rule
-scripts/       traffic simulator entry point
-```
+CI runs all of it on every push and pull request, with no secrets. `npm run screenshot` refreshes the image above.
 
 ## How this was built
 
-I built member-lab by directing AI coding agents (Claude Code). The spec, [SPEC.md](SPEC.md), came first: goals, non-goals and acceptance criteria. The agents wrote the code and tests against it, and lint, typecheck, unit and API tests and a Playwright journey with accessibility checks gate every change.
+I built member-lab by directing AI coding agents (Claude Code). The spec, [SPEC.md](SPEC.md), came first: goals, non-goals and acceptance criteria. The agents wrote the code and tests against it, and lint, typecheck, unit and component tests, a bundle budget and a Playwright journey with accessibility checks gate every change.
 
 ## License
 
