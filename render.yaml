@@ -1,11 +1,11 @@
-# Render Blueprint: one free web service that builds the web app and serves it
+# Render Blueprint: one always-on Starter web service that builds the web app and serves it
 # with the API from a single Node process. Data is in memory and reseeded on
-# every start, so a free instance spinning down after idle loses nothing.
+# every start, so a restart or redeploy loses nothing that matters.
 services:
   - type: web
     name: member-lab
     runtime: node
-    plan: free
+    plan: starter
     # npm ci installs dev dependencies too: the server runs through tsx.
     buildCommand: npm ci && npm run build
     startCommand: npm start
